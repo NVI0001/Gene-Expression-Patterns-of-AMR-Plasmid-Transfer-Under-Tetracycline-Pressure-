@@ -1,0 +1,1186 @@
+---
+title: Impact of Multiple Tetracycline Exposures on the Conjugative Transfer Efficiency of Antimicrobial Resistance Plasmids in Salmonella enterica
+author: "Nneka Vivian Iduu"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+  md_document:
+    variant: gfm
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Install and Load required libraries
+
+install.packages("GEOquery", repos = "http://bioconductor.org/packages/3.14/bioc")
+# Install and load required packages
+#install.packages(c("ggplot2", "dplyr", "tidyr"))
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+  #install.packages("BiocManager")
+#BiocManager::install("apeglm")
+#BiocManager::install("repR")
+#install.packages("reshape2")
+#install.packages("ez") 
+#install.packages("writexl")
+#install.packages("broom")
+#install.packages("sjPlot")
+#install.packages("ggplotify")
+library(apeglm)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(pheatmap)
+library(RColorBrewer) 
+library(ggrepel)
+library(DESeq2)
+library(edgeR)
+library(GEOquery)
+library(limma)
+library(umap)
+library(psych)
+library(readxl)
+library(tibble)
+library(reshape2)
+library(ez)
+library(lme4)
+library(lmerTest)
+library(irr)
+library(rptR)
+library(MCMCglmm)
+library(MuMIn)
+library(sjPlot)
+library(VennDiagram)
+library(grid)
+library(rptR)
+library(broom)
+library(sjPlot)
+library(webshot2)
+library(writexl)
+library(emmeans)
+library(ggpubr)
+library(ggplotify)
+
+```
+## Introduction
+
+Antimicrobial resistance (AMR) in foodborne pathogens, particularly *Salmonella enterica*, 
+represents a significant public health concern, with plasmid-mediated resistance transfer 
+playing a major role in its dissemination. This study investigates the effects of 
+tetracycline exposure on gene expression and conjugative plasmid transfer dynamics in a 
+co-culture of *Salmonella enterica* and *Escherichia coli* over a 240-minute treatment period.
+
+RNA-seq data were analysed using a time-course design across four time points 
+(0, 30, 90, and 240 minutes) to:
+
+- Identify differentially expressed genes between tetracycline-treated and control groups
+- Assess repeatability of gene expression measurements across conditions and time points
+- Characterise temporal regulation of tetracycline resistance and conjugative transfer genes
+
+## Dataset
+
+- **Source:** NCBI Gene Expression Omnibus (GEO)
+- **Accession:** GSE261094
+- **Organism:** *Salmonella enterica* 452 (donor) + *Escherichia coli* J53 (recipient)
+- **Design:** Tetracycline treatment (8 µg/mL) vs Control (PBS)
+- **Time points:** 0, 30, 90, 240 minutes post-exposure
+- **Replicates:** 3 biological replicates per condition
+
+## 1. Data Import and PreProcessing
+
+```{r}
+
+#import dataset..............
+getwd()
+Combined_count <- read_excel("Data/Combined_count.xlsx")
+
+
+# Use column_to_rownames to set the first column as row names
+Combined_count <- column_to_rownames(Combined_count, var = "...1")  # Assuming first column is named "gene_id"
+view(Combined_count)
+head(Combined_count) # Verify the structure
+str(Combined_count)  # Check the structure of the object
+
+
+#load sample informmation
+sample_info <- read_excel("Data/sample_info.xlsx")
+View(sample_info) 
+
+# Use column_to_rownames to set the first column as row names
+sample_info <- column_to_rownames(sample_info, var = "...1")  # Assuming first column is named "gene_id"
+head(sample_info) # Verify the structure
+```
+
+## 2. Gene Expression Distribution and Visualization
+
+```{r}
+#create a deseq object and import the count data and sample info..............
+dSet <- DGEList(counts = Combined_count, group = sample_info$Condition) 
+# Check the structure of the DGEList
+str(dSet)
+
+
+# Apply filterByExpr.....................
+keep <- filterByExpr(dSet, min.count = 5, min.total.count = 10, min.prop = 0.5)
+dSet_sorted <- dSet[keep, ]  # Keep only the filtered genes
+
+# Extract counts from the DGEList object
+counts_matrix <- dSet_sorted$count
+sum(counts_matrix == 0)
+
+# Log-transform the counts (adding 1 to avoid log(0))
+log_counts <- log2(counts_matrix + 1)
+sum(log_counts == 0)
+str(log_counts)  # Check the structure of the log-transformed counts
+summary(log_counts)
+
+# Extract  group information and group labels
+group_info <- dSet_sorted$samples
+group_labels <- group_info$group
+unique(group_labels)
+
+# Identify control and treatment columns based on sample_info
+control_samples <- sample_info$Condition == "Control"  
+treatment_samples <- sample_info$Condition == "Treatment"  
+
+# Subset the log_counts matrix
+control_log_counts <- log_counts[, control_samples]
+treatment_log_counts <- log_counts[, treatment_samples]
+
+
+# Check the distribution of data and save 
+#png("Result/histogram_gene_expression.png", 
+   # width = 10, height = 5, units = "in", res = 300)
+par(mfrow = c(1, 2))
+
+# Control Histogram
+hist(control_log_counts, 
+     main = "Control", 
+     xlab = "log2 Gene Expression", 
+     col = rgb(0, 0, 1, 0.5),  # Blue
+     xlim = range(c(control_log_counts, treatment_log_counts), na.rm = TRUE), 
+     breaks = 30,
+     probability = TRUE)
+
+# Treatment Histogram
+hist(treatment_log_counts, 
+     main = "Treatment", 
+     xlab = "log2 Gene Expression", 
+     col = rgb(1, 0, 0, 0.5),  # Red
+     xlim = range(c(control_log_counts, treatment_log_counts), na.rm = TRUE), 
+     breaks = 30,
+     probability = TRUE)
+#dev.off()  # Close and save the file
+
+# Q-Q plot for log_counts
+#png("Result/QQ_plots.png", 
+    #width = 10, height = 5, units = "in", res = 300)
+par(mfrow = c(1, 2))
+
+qqnorm(control_log_counts, main = "Control")
+qqline(control_log_counts, col = "blue")
+
+qqnorm(treatment_log_counts, main = "Treatment")
+qqline(treatment_log_counts, col = "red")
+
+#dev.off()  # Close and save the file
+```
+
+## 3. Data Reshaping and Metadata Integration
+
+```{r}
+#Transpose data...........................
+# Convert the log_counts matrix to a data frame
+log_counts_df <- as.data.frame(log_counts)
+summary(log_counts_df)
+
+# Add the row names as a column called 'Gene'
+long_combined <- log_counts_df %>%
+  rownames_to_column(var = "Gene") %>%  # Convert row names to a column
+  pivot_longer(cols = -Gene, names_to = "Sample", values_to = "Count")  # Pivot to long format
+
+# Display the reshaped data
+head(long_combined)
+
+# Merge long_combined with sample_info
+#long_combined <- long_combined %>%
+  #left_join(sample_info, by = c("Sample" = "...1"))  # Adjust this as necessary based on your sample names
+
+long_combined <- long_combined %>%
+  left_join(sample_info %>% rownames_to_column(var = "Sample"), by = "Sample")
+
+# Check the merged data
+head(long_combined)
+summary(long_combined)
+
+# Ensure Condition and Time are factors
+long_combined$Condition <- factor(long_combined$Condition)
+long_combined$Time <- factor(long_combined$Time)
+```
+
+## 4. Linear Mixed Effects Model
+
+```{r}
+# Fit a linear mixed-effects model......................
+
+#run for eithr time or conditon, and calculate the ICC intercept/total
+mixed_model <- lmer(Count ~ Time * Condition + (1 | Gene), data = long_combined)
+
+# Summarize the model
+summary(mixed_model)
+
+tab_model(mixed_model)
+
+# First save as HTML
+tab_model(mixed_model, file = "Result/mixed_model_summary.html")
+
+# Then convert to PNG
+webshot2::webshot("Result/mixed_model_summary.html", 
+                  "Result/mixed_model_summary.png")
+r.squaredGLMM(mixed_model)
+```
+
+### 4.1 Model Diagnostics and Predictions
+
+```{r}
+# Create a data frame for predictions
+pred_data <- expand.grid(
+  Time = factor(c(0, 30, 90, 240)),  # Convert Time to a factor
+  Condition = factor(c("Control", "Treatment"))  # Convert Condition to a factor
+)
+
+# Calculate predicted values based on your mixed model
+pred_data$Predicted <- predict(mixed_model, newdata = pred_data, re.form = NA)  # re.form = NA to ignore random effects
+
+# View the predictions
+print(pred_data)
+
+# Create the plot with the group aesthetic
+pred <- ggplot(pred_data, aes(x = Time, y = Predicted, color = Condition, group = Condition)) +
+  geom_line() +  # Draw lines connecting the predicted values
+  geom_point() +  # Add points for predicted values
+  labs(title = "",
+       x = "Time (minutes)",
+       y = "Predicted Count") +
+  theme_minimal()
+plot(pred)
+
+# Save to Results folder
+# ggsave("Result/predicated_count_TvC.png",
+   #    plot = pred,
+    #   width = 7, height = 5, units = "in", dpi = 300)
+
+#post-hoc comparison of fixed effect
+emm <- emmeans(mixed_model, ~ Time * Condition)
+summary(emm)
+plot(emm)
+
+
+# Extract residuals from the mixed model
+residuals <- residuals(mixed_model)
+
+# Plot residuals
+plot(residuals)
+abline(h = 0, col = "red")  # Add a horizontal line at zero
+
+```
+
+## 5. Repeatability Analysis
+
+```{r repeatability-1, eval=FALSE, cache=TRUE}
+repA <- rpt(Count ~ (1|Gene), grname = "Gene", data = long_combined,  datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA
+
+# Save repeatability plot
+# png("Result/repeatability_overall.png",
+    width = 6, height = 5, units = "in", res = 300)
+plot(repA)
+#dev.off()
+
+
+# Example for repeatability - Different approach
+#rpt_result <- rptGaussian(Count ~ Condition * Time + (1 | Gene), 
+   #                       grname = "Gene",
+   #                       data = long_combined,
+    #                      nboot = 1000, 
+     #                     npermut = 100)
+#print(rpt_result)
+
+# Save repeatability plot 2
+#png("Result/repeatability_overall2.png",
+   # width = 6, height = 5, units = "in", res = 300)
+#plot(rpt_result)
+#dev.off()
+
+
+# For control
+# png("Result/repeatibility_control.png", width = 6, height = 5, units = "in", res = 300)
+control_data <- subset(long_combined, Condition == "Control")
+rep_control <- rpt(Count ~ (1|Gene), grname = "Gene", data = control_data, datatype = "Gaussian", nboot = 1000, npermut = 0 )
+rep_control
+#dev.off()
+
+# For treatment
+#png("Result/repeatibility_treatment.png", width = 6, height = 5, units = "in", res = 300)
+treatment_data <- subset(long_combined, Condition == "Treatment")
+rep_treatment <- rpt(Count ~ Time + (1|Gene), grname = "Gene", data = treatment_data, datatype = "Gaussian", nboot = 1000, npermut = 0)
+rep_treatment
+#dev.off()
+
+# Display side by side using base R
+par(mfrow = c(1, 2))
+plot(rep_control, main = "Control")
+plot(rep_treatment, main = "Treatment")
+par(mfrow = c(1, 1))
+```
+
+### 5.1 Repeatability Time Point 0 Analysis
+
+```{r repeatability-2, eval=FALSE, cache=TRUE}
+#subset for Time 0
+T_N_0 <- subset(long_combined, Time == 0)
+head(T_N_0)
+mixed_model1 <- lmer(Count ~ Condition + (1 | Gene), data = T_N_0)
+tab_model(mixed_model1)
+# Summarize the model
+summary(mixed_model1)
+
+# Save tab_model as HTML
+tab_model(mixed_model1, 
+          file = "Result/mixed_model_time0_summary.html")
+
+# Save summary as text
+capture.output(summary(mixed_model1), 
+               file = "Result/mixed_model_time0_summary.txt")
+
+r.squaredGLMM(mixed_model1)
+
+repA_0 <- rpt(Count ~ (1|Gene), grname = "Gene", data = T_N_0,  datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_0
+
+
+# For control condition
+repA_con_0 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_0, Condition == "Control"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_con_0
+
+# For treatment condition
+repA_trt_0 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_0, Condition == "Treatment"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_trt_0
+
+# Display side by side
+par(mfrow = c(1, 3))
+plot(repA_0, main = "Overall T0")
+plot(repA_con_0, main = "Control T0")
+plot(repA_trt_0, main = "Treatment T0")
+par(mfrow = c(1, 1))
+```
+
+### 5.2 Repeatability Time Point 30 Analysis
+
+```{r repeatability-3, eval=FALSE, cache=TRUE}
+#subset for Time 30
+T_N_30 <- subset(long_combined, Time == 30)
+head(T_N_30)
+mixed_model2 <- lmer(Count ~ Condition + (1 | Gene), data = T_N_30)
+# Summarize the model
+summary(mixed_model2)
+tab_model(mixed_model2)
+
+# Save tab_model as HTML
+tab_model(mixed_model2, 
+          file = "Result/mixed_model_time30_summary.html")
+
+# Save summary as text
+capture.output(summary(mixed_model2), 
+               file = "Result/mixed_model_time30_summary.txt")
+
+r.squaredGLMM(mixed_model2)
+
+
+repA_30 <- rpt(Count ~ (1|Gene), grname = "Gene", data = T_N_30,  datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_30
+
+# For control condition
+repA_con_30 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_30, Condition == "Control"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_con_30
+
+# For treatment condition
+repA_trt_30 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_30, Condition == "Treatment"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_trt_30
+
+#side by side display
+par(mfrow = c(1, 3))
+plot(repA_30, main = "Overall T30")
+plot(repA_con_30, main = "Control T30")
+plot(repA_trt_30, main = "Treatment T30")
+par(mfrow = c(1, 1))
+```
+
+### 5.3 Repeatability Time Point 90 Analysis
+
+```{r repeatability-4, eval=FALSE, cache=TRUE}
+#subset for Time 90
+T_N_90 <- subset(long_combined, Time == 90)
+head(T_N_90)
+mixed_model3 <- lmer(Count ~ Condition + (1 | Gene), data = T_N_90)
+# Summarize the model
+summary(mixed_model3)
+# Save tab_model as HTML
+tab_model(mixed_model3, 
+          file = "Result/mixed_model_time90_summary.html")
+
+# Save summary as text
+capture.output(summary(mixed_model3), 
+               file = "Result/mixed_model_time90_summary.txt")
+
+r.squaredGLMM(mixed_model3)
+
+# overall repeatability plot
+repA_90 <- rpt(Count ~ (1|Gene), grname = "Gene", data = T_N_90, datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_90
+
+# For control condition
+repA_con_90 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_90, Condition == "Control"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_con_90
+
+# For treatment condition
+repA_trt_90 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_90, Condition == "Treatment"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_trt_90
+
+# side by side display
+par(mfrow = c(1, 3))
+plot(repA_90, main = "Overall T90")
+plot(repA_con_90, main = "Control T90")
+plot(repA_trt_90, main = "Treatment T90")
+par(mfrow = c(1, 1))
+
+```
+
+### 5.4 Repeatability Time Point 240 Analysis  
+
+```{r repeatability-5, eval=FALSE, cache=TRUE}
+
+#subset for Time 240
+T_N_240 <- subset(long_combined, Time == 240)
+head(T_N_240)
+mixed_model4 <- lmer(Count ~ Condition + (1 | Gene), data = T_N_240)
+# Summarize the model
+summary(mixed_model4)
+# Save tab_model as HTML
+tab_model(mixed_model4, 
+          file = "Result/mixed_model_time240_summary.html")
+
+# Save summary as text
+capture.output(summary(mixed_model4), 
+               file = "Result/mixed_model_time240_summary.txt")
+
+r.squaredGLMM(mixed_model4)
+
+#overall repeatability
+repA_240 <- rpt(Count ~ (1|Gene), grname = "Gene", data = T_N_240, datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_240
+
+# For control condition
+repA_con_240 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_240, Condition == "Control"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_con_240
+
+# For treatment condition
+repA_trt_240 <- rpt(Count ~ (1 | Gene), grname = "Gene", data = subset(T_N_240, Condition == "Treatment"), datatype = "Gaussian", nboot = 1000, npermut = 0)
+repA_trt_240
+
+# side by side display
+par(mfrow = c(1, 3))
+plot(repA_240, main = "Overall T240")
+plot(repA_con_240, main = "Control T240")
+plot(repA_trt_240, main = "Treatment T240")
+par(mfrow = c(1, 1))
+
+```
+
+### 5.5 Repeatability Data Visualization
+
+```{r}
+
+# Repeatability data visualization
+data <- data.frame(
+  Time = rep(c("0", "30", "90", "240"), each = 2),
+  Condition = rep(c("Control", "Treatment"), times = 4),
+  Repeatability = c(0.898, 0.899, 0.794, 0.918, 0.920, 0.935, 0.907, 0.934),
+  Error = c(0.003, 0.003, 0.005, 0.002, 0.002, 0.002, 0.002, 0.002)
+)
+
+# Load ggplot2 library
+library(ggplot2)
+
+# Create the barplot
+repeatability_plot <-ggplot(data, aes(x = Time, y = Repeatability, fill = Condition)) +
+  geom_bar(stat = "identity", position = position_dodge(), width = 0.7) +
+  geom_errorbar(aes(ymin = Repeatability - Error, ymax = Repeatability + Error),
+                position = position_dodge(0.7), width = 0.2) +
+  scale_fill_manual(values = c("steelblue", "lightcoral")) +
+  scale_y_continuous(limits = c(0, 1)) +  # Set y-axis range from 0 to 1
+  theme_minimal() +
+  labs(title = "",
+       x = "Time-point (minutes)",
+       y = "Repeatability",
+       fill = "Condition") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 13),
+    legend.title = element_text(size = 13)
+  )
+plot(repeatability_plot)
+# Save to Results folder
+#ggsave("Result/repeatability_barplot_TvC.png",
+   #    plot = repeatability_plot,
+    #   width = 7, height = 5, units = "in", dpi = 300)
+
+# Ensure Time is a factor with proper levels
+data$Time <- factor(data$Time, levels = c("0", "30", "90", "240"))
+
+# Create the barplot
+#repeatability_plot2 <- ggplot(data, aes(x = Time, y = Repeatability, fill = Condition)) +
+ # geom_bar(stat = "identity", position = position_dodge(), width = 0.8) +
+  #geom_errorbar(aes(ymin = Repeatability - Error, ymax = Repeatability + Error),
+    #            position = position_dodge(0.7), width = 0.2) +
+ # scale_fill_manual(values = c("steelblue", "lightcoral")) +
+ # scale_y_continuous(limits = c(0, 1)) +
+ # theme_minimal() +
+ # labs(title = "",
+   #    x = "Time Point",
+    #   y = "Repeatability",
+     #  fill = "Condition") +
+ # theme(
+  #  plot.title = element_text(hjust = 0.5, size = 14),
+   # axis.text = element_text(size = 12),
+  #  axis.title = element_text(size = 13),
+   # legend.title = element_text(size = 13)
+ # ) +
+ # facet_wrap(~ Condition)  # Separate plots for each group (Treatment/Control)
+
+# Save to Results folder
+#ggsave("Result/repeatability_barplot_Timpoints.png",
+  #     plot = repeatability_plot2,
+    #   width = 7, height = 5, units = "in", dpi = 300)
+```
+
+## 6. Differential Expression Analysis
+
+```{r,echo=TRUE}
+
+# (1) Differential gene expression overall treatment and control of based on voom
+
+# Create design matrix
+design_main <- model.matrix(~ Condition + Time, data = sample_info)
+
+# Estimate the dispersion
+dSet_est <- estimateDisp(dSet_sorted, design_main)
+
+# Apply voom transformation to stabilize variance
+voom <- voom(dSet_est, design_main, plot = TRUE)
+
+# Fit the linear model
+fit_main <- lmFit(voom, design_main)
+
+# Apply eBayes to compute moderated t-statistics
+fit_main <- eBayes(fit_main)
+
+# View the coefficients
+colnames(fit_main$coefficients)
+
+# Differential expression for overall control vs treatment
+topTable_main <- topTable(fit_main, coef = "ConditionTreatment", number = Inf)
+
+# Filter significant genes (p-value < 0.05 and logFC > 2)
+sig_genes_main <- topTable_main[topTable_main$P.Value < 0.05 & abs(topTable_main$logFC) > 2, ]
+```
+
+### 6.1 Visualization of Diferentially Expressed Genes
+
+```{r}
+# Visualization of DEGS 
+#Create a data frame for plotting
+volcano_data <- topTable(fit_main, coef="ConditionTreatment", number=Inf)
+volcano_data$Significance <- ifelse(volcano_data$P.Value < 0.05 & abs(volcano_data$logFC) > 2, "Significant", "Not Significant")
+
+# Plot the volcano plot
+DEGs <- ggplot(volcano_data, aes(x=logFC, y=-log10(P.Value), color=Significance)) +
+  geom_point(alpha=1, size=1.5) +
+  scale_color_manual(values=c("black", "red")) +
+  labs(x="Log Fold Change", y="-Log10(p-value)", title="") +
+  theme_minimal()
+
+plot(DEGs)
+
+# Save to Results folder
+# ggsave("Result/volcano_plot_DEGs.png",
+      # plot = DEGs,
+     #  width = 7, height = 5, units = "in", dpi = 300)
+```
+
+### 6.2 Time-Course Differential Expression Analysis
+
+```{r}
+#DESIGN MATRIX for time points comparison between treatment and control interaction using voom
+
+# Redefine the Time variable as a factor with explicit levels
+sample_info$Time <- factor(sample_info$Time)
+
+# Create the design matrix with separate columns for each time point and interaction terms
+design <- model.matrix(~ Condition + Time + Condition:Time, data = sample_info)
+print(design)
+
+
+# Rename columns to replace ":" with "_"
+colnames(design) <- gsub(":", "_", colnames(design))
+print(colnames(design))
+
+# Define contrasts based on desired comparison
+contrasts <- makeContrasts(
+  Treatment_vs_Control_Time0 = ConditionTreatment,
+  Treatment_vs_Control_Time30 = ConditionTreatment_Time30,
+  Treatment_vs_Control_Time90 = ConditionTreatment_Time90,
+  Treatment_vs_Control_Time240 = ConditionTreatment_Time240,
+  
+  # Control Time points vs Time 0
+  Control_Time30_vs_Time0 = Time30,
+  Control_Time90_vs_Time0 = Time90,
+  Control_Time240_vs_Time0 = Time240,
+  
+  levels = design
+)
+
+
+# Estimate dispersion
+dSet_est <- estimateDisp(dSet_sorted, design)
+
+
+# Fit the LM model
+v <- voom(dSet_est, design, plot = TRUE)
+fit <- lmFit(v, design)
+
+# Apply the contrasts
+fit <- contrasts.fit(fit, contrasts)
+fit <- eBayes(fit)
+
+colnames(fit$coefficients)
+
+
+# Differential expression for each time point
+topTable_0 <- topTable(fit, coef="Treatment_vs_Control_Time0", number=Inf)
+sig_genes_0 <- topTable_0[topTable_0$P.Value < 0.05 & abs(topTable_0$logFC) > 2, ]
+topTable_30 <- topTable(fit, coef="Treatment_vs_Control_Time30", number=Inf)
+sig_genes_30 <- topTable_30[topTable_30$P.Value < 0.05 & abs(topTable_30$logFC) > 2, ]
+topTable_90 <- topTable(fit, coef="Treatment_vs_Control_Time90", number=Inf)
+sig_genes_90 <- topTable_90[topTable_90$P.Value < 0.05 & abs(topTable_90$logFC) > 2, ]
+topTable_240 <- topTable(fit, coef="Treatment_vs_Control_Time240", number=Inf)
+sig_genes_240 <- topTable_240[topTable_240$P.Value < 0.05 & abs(topTable_240$logFC) > 2, ]
+
+
+# Differential expression in control group to time zero
+Con_30v0 <- topTable(fit, coef="Control_Time30_vs_Time0", number=Inf)
+sig_con_30v0 <- Con_30v0[Con_30v0$P.Value < 0.05 & abs(Con_30v0$logFC) > 2, ]
+Con_90v0 <- topTable(fit, coef="Control_Time90_vs_Time0", number=Inf)
+sig_con_90v0 <- Con_90v0[Con_90v0$P.Value < 0.05 & abs(Con_90v0$logFC) > 2, ]
+Con_240v0 <- topTable(fit, coef="Control_Time240_vs_Time0", number=Inf)
+sig_con_240v0 <- Con_240v0[Con_240v0$P.Value < 0.05 & abs(Con_240v0$logFC) > 2, ]
+```
+
+### 6.3 DEG Overlap between Treatment and Control
+
+```{r}
+#visualization
+# Create a list of DEGs at each time point for Treatment and Control interaction
+
+venn_data1 <- list(
+  "TvC0" = rownames(sig_genes_0),
+  "TvC30" = rownames(sig_genes_30),
+  "TvC90" = rownames(sig_genes_90),
+  "TvC240" = rownames(sig_genes_240)
+)
+
+venn.plot <- venn.diagram(
+  venn_data1,
+  filename = NULL,
+  fill = c("red", "green", "blue", "purple"),
+  alpha = 0.5,
+  main = "Overlap of Differentially Expressed Genes of TvC"
+)
+grid.draw(venn.plot)
+
+# Save to Results folder
+#png("Result/venn_timepoints_TvC_DEGs.png",
+  #  width = 7, height = 7, units = "in", res = 300)
+#grid.draw(venn.plot)
+#dev.off()
+```
+
+### 6.3.1 DEG Overlap of Control relative to baseline across timepoints
+
+```{r}
+#visualization
+# Create a list of DEGs at each time point for Control interaction at different timepoints relative to baseline
+venn_data2 <- list(
+  "30 vs 0" = rownames(sig_con_30v0),
+  "90 vs 0" = rownames(sig_con_90v0),
+  "240 vs 0" = rownames(sig_con_240v0)
+)
+
+venn.plot2 <- venn.diagram(
+  venn_data2,
+  filename = NULL,
+  fill = c("red", "green", "blue"),
+  alpha = 0.5,
+  main = "Overlap of Differentially Expressed Genes in Control"
+)
+grid.draw(venn.plot2)
+
+# Save to Results folder
+#png("Result/venn_timepoints_Control_DEGs.png",
+   # width = 7, height = 7, units = "in", res = 300)
+#grid.draw(venn.plot2)
+#dev.off()
+```
+
+### 6.3.2 Treatment vs Control DEGs Overlap at Timepoint 30
+
+```{r}
+
+# Treatment vs Control DEGs compared to Control baseline at each time point
+
+#T30 and C30
+T30_C30 <- list(
+  "T30" = rownames(sig_genes_30),
+  "C30" = rownames(sig_con_30v0)
+)
+
+venn.plot.30 <- venn.diagram(
+  T30_C30,
+  filename = NULL,
+  fill = c("red", "blue"),
+  alpha = 0.5,
+  main = "Overlap of DEGs between T30 and C30v0"
+)
+grid.draw(venn.plot.30)
+
+#png("Result/venn_DEGs_T30_vs_C30v0.png",
+  #  width = 6, height = 6, units = "in", res = 300)
+#grid.draw(venn.plot.30)
+#dev.off()
+```
+
+### 6.3.3 Treatment vs Control DEGs Overlap at Timepoint  90
+
+```{r}
+#T90 and C90
+T90_C90 <- list(
+  "T90" = rownames(sig_genes_90),
+  "C90" = rownames(sig_con_90v0)
+)
+
+venn.plot.90 <- venn.diagram(
+  T90_C90,
+  filename = NULL,
+  fill = c("red", "blue"),
+  alpha = 0.5,
+  main = "Overlap of DEGs between T90 and C90v0"
+)
+grid.draw(venn.plot.90)
+#png("Result/venn_DEGs_T90_vs_C90v0.png",
+  #  width = 6, height = 6, units = "in", res = 300)
+#grid.draw(venn.plot.90)
+#dev.off()
+
+
+```
+
+### 6.3.4 Treatment vs Control DEGs Overlap at Timepoint  240
+
+```{r}
+#T240 and C240
+T240_C240 <- list(
+  "T240" = rownames(sig_genes_240),
+  "C240" = rownames(sig_con_240v0)
+)
+
+venn.plot.240 <- venn.diagram(
+  T240_C240,
+  filename = NULL,
+  fill = c("red", "blue"),
+  alpha = 0.5,
+  main = "Overlap of DEGs between T240 and C240v0"
+)
+grid.draw(venn.plot.240)
+
+#png("Result/venn_DEGs_T240_vs_C240v0.png",
+  #  width = 6, height = 6, units = "in", res = 300)
+#grid.draw(venn.plot.240)
+#dev.off()
+```
+
+### 6.4 DEG Counts
+### 6.4.1 DEG Counts in Control Group Relative to Baseline
+
+```{r}
+# Count of Upregulated and downregulated genes in control group comparison separate lists
+upregulated <- list(
+  "30 vs 0" = rownames(sig_con_30v0[sig_con_30v0$logFC > 2, ]),
+  "90 vs 0" = rownames(sig_con_90v0[sig_con_90v0$logFC > 2, ]),
+  "240 vs 0" = rownames(sig_con_240v0[sig_con_240v0$logFC > 2, ])
+)
+summary(upregulated)
+downregulated <- list(
+  "30 vs 0" = rownames(sig_con_30v0[sig_con_30v0$logFC < 2, ]),
+  "90 vs 0" = rownames(sig_con_90v0[sig_con_90v0$logFC < 2, ]),
+  "240 vs 0" = rownames(sig_con_240v0[sig_con_240v0$logFC < 2, ])
+)
+summary(downregulated)
+
+
+# Count upregulated and downregulated genes for each comparison
+up_counts <- sapply(upregulated, length)
+down_counts <- sapply(downregulated, length)
+
+# Combine the counts into a single data frame
+gene_counts <- data.frame(
+  TimePoint = rep(c("30 vs 0", "90 vs 0", "240 vs 0"), each = 2),
+  Regulation = rep(c("Up", "Down"), times = 3),
+  Count = c(up_counts, down_counts)
+)
+
+# View the gene counts
+print(gene_counts)
+
+# Ensure TimePoint is a factor and ordered correctly
+gene_counts$TimePoint <- factor(gene_counts$TimePoint, levels = c("30 vs 0", "90 vs 0", "240 vs 0"))
+
+# Plot the data as stacked bars
+DEGs_Con <-ggplot(gene_counts, aes(x = TimePoint, y = Count, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.4) +   # Use "stack" for stacked bars
+  labs(
+    title = "DEGs of control against baseline",
+    x = "Time Point",
+    y = "Number of DEGs"
+  ) +
+  scale_fill_manual(values = c("Up" = "blue", "Down" = "red")) +
+  theme_minimal()
+
+plot(DEGs_Con)
+# Save to Results folder
+#ggsave("Result/DEGs_control_vs_baseline.png",
+     #  plot = DEGs_Con,
+      # width = 7, height = 5, units = "in", dpi = 300)
+```
+
+### 6.4.2 DEG Counts: Treatment vs Control at Each Time Point
+
+```{r}
+#Visualization of the number of differentially expressed genes between treatment and control at each timepoint
+
+# Create the data frame
+gene_counts <- data.frame(
+  TimePoint = c("0 min", "30 min", "90 min", "240 min"),
+  Upregulated = c(11, 6, 39, 21),
+  Downregulated = c(6, 45, 83, 5)
+)
+
+# Reshape the data to long format for ggplot2
+gene_counts_long <- reshape2::melt(
+  gene_counts,
+  id.vars = "TimePoint",
+  variable.name = "Regulation",
+  value.name = "Count"
+)
+
+# Ensure TimePoint is ordered correctly
+gene_counts_long$TimePoint <- factor(gene_counts_long$TimePoint, levels = c("0 min", "30 min", "90 min", "240 min"))
+
+# Adjust the order of levels for stacking
+gene_counts_long$Regulation <- factor(gene_counts_long$Regulation, levels = c("Downregulated", "Upregulated"))
+
+# Plot the data as a stacked bar plot
+DEGs_TvC <-ggplot(gene_counts_long, aes(x = TimePoint, y = Count, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.6) +  # Adjust width for slimmer bars
+  labs(
+    title = "DEGs of treatment against control at each timepoint",
+    x = "Time Point",
+    y = "Number of DEGs"
+  ) +
+  scale_fill_manual(values = c("Downregulated" = "red", "Upregulated" = "blue")) +
+  theme_minimal()
+
+plot(DEGs_TvC)
+
+# Save to Results folder
+#ggsave("Result/DEGs of TvC Timepoint comparison .png",
+      # plot = DEGs_TvC,
+      # width = 7, height = 5, units = "in", dpi = 300)
+```
+
+
+### 6.5 Visualization of Gene Expression Patterns Across Time Points between Conditions
+
+```{r}
+# (Method 1) Combine all differential genes across timepoints
+
+combined_df_tp <- rbind(
+  mutate(topTable_0, Timepoint = 0),
+  mutate(topTable_30, Timepoint = 30),
+  mutate(topTable_90, Timepoint = 90),
+  mutate(topTable_240, Timepoint = 240)
+)
+
+# Ensure the first column is treated as gene names by converting row names
+combined_df_tp <- rownames_to_column(combined_df_tp, var = "Gene")
+
+# Reshape data for heatmap
+heatmap_df_data <- combined_df_tp %>%
+  select(Gene, Timepoint, logFC) %>%
+  pivot_wider(
+    names_from = Timepoint, 
+    values_from = logFC, 
+    names_prefix = "Time_"
+  )
+
+
+# Convert to matrix, removing the Gene column
+heatmap_df_matrix <- as.matrix(heatmap_df_data[, -1])
+
+
+# Optional: Replace NA with 0 or mean
+heatmap_df_matrix[is.na(heatmap_df_matrix)] <- 0
+
+
+# Create the heatmap
+pheatmap(heatmap_df_matrix, 
+         cluster_rows = TRUE, 
+         cluster_cols = FALSE,
+         main = "")
+
+# Save to Results folder
+#png("Result/heatmap_all_DEGs.png",
+   # width = 8, height = 10, units = "in", res = 300)
+#pheatmap(heatmap_df_matrix,
+        # cluster_rows = TRUE,
+         #cluster_cols = FALSE,
+       #  main = "")
+#dev.off()
+
+# (Method 2.) Combine all significant genes across timepoints
+#combined_sig_tp <- rbind(
+ # mutate(sig_genes_0, Timepoint = 0),
+  #mutate(sig_genes_30, Timepoint = 30),
+ # mutate(sig_genes_90, Timepoint = 90),
+ # mutate(sig_genes_240, Timepoint = 240)
+#)
+
+# Ensure the first column is treated as gene names by converting row names
+#combined_sig_tp <- rownames_to_column(combined_sig_tp, var = "Gene")
+
+# Reshape data for heatmap
+#heatmap_sig_data <- combined_sig_tp %>%
+  #select(Gene, Timepoint, logFC) %>%
+ # pivot_wider(
+  #  names_from = Timepoint, 
+   # values_from = logFC, 
+   # names_prefix = "Time_"
+  #)
+
+# Convert to matrix, removing the Gene column
+#heatmap_sig_matrix <- as.matrix(heatmap_sig_data[, -1])
+
+
+# Remove rows with NA or Inf values
+#heatmap_data_clean <- heatmap_sig_matrix %>%
+ # filter(
+  #  !if_any(starts_with("Time_"), ~is.na(.) | is.infinite(.))
+ # )
+
+# Optional: Replace NA with 0 or mean
+# heatmap_sig_matrix[is.na(heatmap_sig_matrix)] <- 0
+
+# Create the heatmap
+#pheatmap(heatmap_sig_matrix, 
+        # cluster_rows = TRUE, 
+        # cluster_cols = TRUE,
+        # main = "Gene Expression Changes Across Time Points")
+```
+
+### 6.6 Visualization of Significant Genes by Time Point
+### 6.6.1 Visualization of Significant Genes by Time Point 0
+
+```{r}
+# visualization of significantly regulated genes at each time-points
+# 1.load gene name for significant time_0
+GSE261094_Sal452_RNA_Seq_T <- read_excel("Data/GSE261094_Sal452_RNA_Seq_T.xlsx", sheet = "sig_gene_o")
+
+
+# Ensure the first column is treated as gene names by converting row names
+sig_genes_0 <- rownames_to_column(sig_genes_0, var = "Gene_ID")
+
+
+write_xlsx(sig_genes_0, "Result/sig_genes_0.xlsx")
+
+# Merge data based on Gene ID
+sig_genes_name_0 <- sig_genes_0 %>%
+  inner_join(GSE261094_Sal452_RNA_Seq_T, by = "Gene_ID")
+
+# Save
+write_xlsx(sig_genes_name_0, "Result/sig_genes_name_0.xlsx")
+
+
+# Add a column for direction (Up or Down regulation)
+sig_genes_name_0  <- sig_genes_name_0 %>%
+  mutate(Direction = ifelse(logFC > 2, "Upregulated", "Downregulated"))
+
+# Create the plot
+sig_0 <- ggplot(sig_genes_name_0, aes(x = logFC, y = reorder(Gene_name, logFC))) +
+  geom_bar(stat = "identity", aes(fill = Direction), width = 0.7) +
+  scale_fill_manual(values = c("Upregulated" = "blue", "Downregulated" = "red")) +
+  labs(x = "Log Fold Change (logFC)", y = "Differenial Expressed Genes (time point 0)") +
+  theme_minimal() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme(axis.text.y = element_text(size = 8))  # Adjust text size if necessary
+plot(sig_0)
+
+# Save to Results folder
+#ggsave("Result/Significant Genes Timepoint 0.png",
+      # plot = sig_0,
+      # width = 7, height = 5, units = "in", dpi = 300)
+```
+
+### 6.6.2 Visualization of Significant Genes by Time Point 30
+
+```{r}
+# 2.load gene name for significant time_30
+GSE261094_Sal452_RNA_Seq_T <- read_excel("Data/GSE261094_Sal452_RNA_Seq_T.xlsx", sheet = "sig_gene_30")
+
+
+
+# Ensure the first column is treated as gene names by converting row names
+sig_genes_30 <- rownames_to_column(sig_genes_30, var = "Gene_ID")
+library(writexl)
+write_xlsx(sig_genes_30, "Result/sig_genes_30.xlsx")
+
+# Merge data based on Gene ID
+sig_genes_name_30 <- sig_genes_30 %>%
+  inner_join(GSE261094_Sal452_RNA_Seq_T, by = "Gene_ID")
+
+# Save
+write_xlsx(sig_genes_name_30, "Result/sig_genes_name_30.xlsx")
+
+
+# Add a column for direction (Up or Down regulation)
+sig_genes_name_30  <- sig_genes_name_30 %>%
+  mutate(Direction = ifelse(logFC > 2, "Upregulated", "Downregulated"))
+
+# Create the plot
+sig_30 <- ggplot(sig_genes_name_30, aes(x = logFC, y = reorder(Gene_name, logFC))) +
+  geom_bar(stat = "identity", aes(fill = Direction), width = 0.7) +
+  scale_fill_manual(values = c("Upregulated" = "blue", "Downregulated" = "red")) +
+  labs(x = "Log Fold Change (logFC)", y = "Differenial Expressed Genes (time point 30)") +
+  theme_minimal() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme(axis.text.y = element_text(size = 8))  # Adjust text size if necessary
+
+plot(sig_30)
+
+# Save to Results folder
+#ggsave("Result/Significant Genes Timepoint 30.png",
+   #    plot = sig_30,
+     #  width = 7, height = 5, units = "in", dpi = 300)
+```
+
+### 6.6.3 Visualization of Significant Genes by Time Point 90
+
+```{r sig-genes-90, fig.width=12, fig.height=14}
+# 3.load gene name for significant time_90
+GSE261094_Sal452_RNA_Seq_T <- read_excel("Data/GSE261094_Sal452_RNA_Seq_T.xlsx", sheet = "sig_gene_90")
+
+# Ensure the first column is treated as gene names by converting row names
+sig_genes_90 <- rownames_to_column(sig_genes_90, var = "Gene_ID")
+
+write_xlsx(sig_genes_90, "Result/sig_genes_90.xlsx")
+
+# Merge data based on Gene ID
+sig_genes_name_90 <- sig_genes_90 %>%
+  inner_join(GSE261094_Sal452_RNA_Seq_T, by = "Gene_ID")
+
+# Save
+write_xlsx(sig_genes_name_90, "Result/sig_genes_name_90.xlsx")
+
+
+# Add a column for direction (Up or Down regulation)
+sig_genes_name_90  <- sig_genes_name_90 %>%
+  mutate(Direction = ifelse(logFC > 2, "Upregulated", "Downregulated"))
+
+# Create the plot
+sig_90 <- ggplot(sig_genes_name_90, aes(x = logFC, y = reorder(Gene_name, logFC))) +
+  geom_bar(stat = "identity", aes(fill = Direction), width = 0.7) +
+  scale_fill_manual(values = c("Upregulated" = "blue", "Downregulated" = "red")) +
+  labs(x = "Log Fold Change (logFC)", y = "Differenial Expressed Genes (time point 90)") +
+  theme_minimal() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme(axis.text.y = element_text(size = 7))  # Adjust text size if necessary
+plot(sig_90)
+
+# Save to Results folder
+# ggsave("Result/Significant Genes Timepoint 90.png",
+     #  plot = sig_90,
+      # width = 9, height = 10, units = "in", dpi = 300)
+```
+
+### 6.6.4 Visualization of Significant Genes by Time Point 240
+
+```{r}
+# 4.load gene name for significant time_240
+GSE261094_Sal452_RNA_Seq_T <- read_excel("Data/GSE261094_Sal452_RNA_Seq_T.xlsx", sheet = "sig_gene_240")
+
+
+
+# Ensure the first column is treated as gene names by converting row names
+sig_genes_240 <- rownames_to_column(sig_genes_240, var = "Gene_ID")
+
+write_xlsx(sig_genes_240, "Result/sig_genes_240.xlsx")
+
+# Merge data based on Gene ID
+sig_genes_name_240 <- sig_genes_240 %>%
+  inner_join(GSE261094_Sal452_RNA_Seq_T, by = "Gene_ID")
+
+# Save
+write_xlsx(sig_genes_name_240, "Result/sig_genes_name_240.xlsx")
+
+
+# Add a column for direction (Up or Down regulation)
+sig_genes_name_240  <- sig_genes_name_240 %>%
+  mutate(Direction = ifelse(logFC > 2, "Upregulated", "Downregulated"))
+
+# Create the plot
+sig_240 <- ggplot(sig_genes_name_240, aes(x = logFC, y = reorder(Gene_name, logFC))) +
+  geom_bar(stat = "identity", aes(fill = Direction), width = 0.7) +
+  scale_fill_manual(values = c("Upregulated" = "blue", "Downregulated" = "red")) +
+  labs(x = "Log Fold Change (logFC)", y = "Differenial Expressed Genes (time point 240)") +
+  theme_minimal() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme(axis.text.y = element_text(size = 8))  # Adjust text size if necessary
+
+plot(sig_240)
+
+# Save to Results folder
+# ggsave("Result/Significant Genes Timepoint 240.png",
+     #  plot = sig_240,
+     #  width = 7, height = 5, units = "in", dpi = 300)
+
+
+
+```
+
+```{r}
+fs::dir_tree()
+```
+
