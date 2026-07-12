@@ -42,6 +42,8 @@ a suppressor and promoter of plasmid transfer in a time-dependent manner.
 
 
 ## Repository Structure
+
+```
 .
 ├── Data
 │   ├── Combined_count.xlsx
@@ -95,6 +97,8 @@ a suppressor and promoter of plasmid transfer in a time-dependent manner.
 ├── antimicrobial_dataset.Rmd
 ├── antimicrobial_dataset.html
 
+```
+
 ## Requirements
 
 **R version:** 4.3.1 or higher
@@ -110,7 +114,6 @@ install.packages(c("ggplot2", "dplyr", "tidyr", "tidyverse",
                    "VennDiagram", "ggpubr", "ggplotify",
                    "webshot2", "rptR"))
                    
-```
 
 # Bioconductor packages
 if (!requireNamespace("BiocManager", quietly = TRUE))
@@ -118,7 +121,8 @@ if (!requireNamespace("BiocManager", quietly = TRUE))
 BiocManager::install(c("DESeq2", "edgeR", "limma", 
                        "GEOquery", "apeglm"))
        
-                      
+```
+
 ## How to Run
 
 **1. Clone the repository**
